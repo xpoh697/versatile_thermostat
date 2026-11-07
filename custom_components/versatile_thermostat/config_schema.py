@@ -144,7 +144,23 @@ STEP_MAIN_DATA_SCHEMA = vol.Schema(  # pylint: disable=invalid-name
         vol.Optional(CONF_LAST_SEEN_TEMP_SENSOR): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=[SENSOR_DOMAIN, INPUT_DATETIME_DOMAIN, NUMBER_DOMAIN]),
         ),
-        vol.Required(CONF_CYCLE_MIN, default=5): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=1000, step=1, mode=selector.NumberSelectorMode.BOX)),
+        vol.Required(CONF_CYCLE_MIN, default="5"): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    selector.SelectOptionDict(value="5", label="5 мин (электроконвекторы / ТЭНы)"),
+                    selector.SelectOptionDict(value="10", label="10 мин (электрорадиаторы)"),
+                    selector.SelectOptionDict(value="15", label="15 мин (радиаторы отопления)"),
+                    selector.SelectOptionDict(value="20", label="20 мин (радиаторы / легкий пол)"),
+                    selector.SelectOptionDict(value="30", label="30 мин (смешанные контуры)"),
+                    selector.SelectOptionDict(value="60", label="60 мин / 1 час (теплый пол)"),
+                    selector.SelectOptionDict(value="120", label="120 мин / 2 часа (стяжка теплого пола)"),
+                    selector.SelectOptionDict(value="180", label="180 мин / 3 часа (тяжелая стяжка)"),
+                    selector.SelectOptionDict(value="240", label="240 мин / 4 часа (УШП / фундаментная плита)"),
+                ],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                custom_value=False,
+            )
+        ),
 
         vol.Optional(CONF_DEVICE_POWER, default="1"): vol.Coerce(float),
         vol.Optional(CONF_POWER_UNIT, default=POWER_UNIT_WATT): selector.SelectSelector(

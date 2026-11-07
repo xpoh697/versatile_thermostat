@@ -508,6 +508,11 @@ class VersatileThermostatBaseConfigFlow(FlowHandler):
     def merge_user_input(self, data_schema: vol.Schema, user_input: dict):
         """For each schema entry not in user_input, set or remove values in infos"""
         self._infos.update(user_input)
+        if CONF_CYCLE_MIN in self._infos:
+            try:
+                self._infos[CONF_CYCLE_MIN] = int(self._infos[CONF_CYCLE_MIN])
+            except (ValueError, TypeError):
+                pass
         for key, _ in data_schema.schema.items():
             if key not in user_input and isinstance(key, vol.Marker):
                 _LOGGER.debug(
@@ -527,6 +532,8 @@ class VersatileThermostatBaseConfigFlow(FlowHandler):
         )
 
         defaults = self._infos.copy()
+        if CONF_CYCLE_MIN in defaults:
+            defaults[CONF_CYCLE_MIN] = str(defaults[CONF_CYCLE_MIN])
         errors = {}
 
         if user_input is not None:

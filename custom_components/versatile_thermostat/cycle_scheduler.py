@@ -271,6 +271,15 @@ class CycleScheduler:
             and abs(on_percent_a - on_percent_b) <= 1e-9
         )
 
+    def _get_time_to_next_boundary(self) -> float:
+        """Calculate seconds remaining until the next wall-clock cycle boundary."""
+        from homeassistant.util import dt as dt_util
+        now = dt_util.now()
+        seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1_000_000.0
+        cycle_sec = max(60.0, float(self._cycle_duration_sec))
+        rem = cycle_sec - (seconds_since_midnight % cycle_sec)
+        return rem if rem >= 1.0 else cycle_sec
+
     async def start_cycle(
         self,
         hvac_mode: VThermHvacMode,
@@ -372,28 +381,15 @@ class CycleScheduler:
                 self._set_pending_cycle(hvac_mode, on_time_sec, off_time_sec, realized_on_percent, request)
                 return
             # Current cycle is idle (on_time=0, device off).
-            # Keep it running if the requested idle cycle is unchanged; otherwise
-            # cancel it and allow the new cycle to start immediately.
-            if self._same_cycle_request(
-                self._active_hvac_mode,
-                self._active_on_time_sec,
-                self._active_off_time_sec,
-                self._active_on_percent,
-                hvac_mode,
+            # To maintain synchronous clock grid, keep the aligned cycle running unless force=True.
+            _LOGGER.debug(
+                "%s - Cycle is running in idle phase, storing updated params for next aligned boundary: on_time=%.0f, off_time=%.0f",
+                self._thermostat,
                 on_time_sec,
                 off_time_sec,
-                realized_on_percent,
-            ):
-                _LOGGER.debug(
-                    "%s - Current cycle is idle and unchanged, keeping existing cycle",
-                    self._thermostat,
-                )
-                self._set_pending_cycle(hvac_mode, on_time_sec, off_time_sec, realized_on_percent, request)
-                return
-            _LOGGER.debug(
-                "%s - Current cycle is idle (on_time=0), replacing with changed cycle",
-                self._thermostat,
             )
+            self._set_pending_cycle(hvac_mode, on_time_sec, off_time_sec, realized_on_percent, request)
+            return
 
         await self._cancel_cycle_impl()
 
@@ -556,7 +552,7 @@ class CycleScheduler:
         self._reset_valve_cycle_trace(self._current_on_percent)
         self._cycle_end_unsub = async_call_later(
             self._hass,
-            self._cycle_duration_sec,
+            self._get_time_to_next_boundary(),
             self._on_master_cycle_end,
         )
 
@@ -584,7 +580,7 @@ class CycleScheduler:
             # reports a full elapsed_ratio instead of looking interrupted with 0 s elapsed.
             self._cycle_start_time = time.time()
             # Schedule next cycle evaluation
-            self._cycle_end_unsub = async_call_later(self._hass, self._cycle_duration_sec, self._on_master_cycle_end)
+            self._cycle_end_unsub = async_call_later(self._hass, self._get_time_to_next_boundary(), self._on_master_cycle_end)
             return
 
         if on_time_sec >= self._cycle_duration_sec:
@@ -595,7 +591,7 @@ class CycleScheduler:
             # Keep a real master-cycle start time for the same reason as 0% cycles.
             self._cycle_start_time = time.time()
             # Schedule next cycle evaluation
-            self._cycle_end_unsub = async_call_later(self._hass, self._cycle_duration_sec, self._on_master_cycle_end)
+            self._cycle_end_unsub = async_call_later(self._hass, self._get_time_to_next_boundary(), self._on_master_cycle_end)
             return
 
         self._init_cycle(on_percent)
@@ -604,7 +600,7 @@ class CycleScheduler:
         await self._tick(_is_initial=True)
 
         # Also ensure master cycle end is scheduled independently to wrap up the cycle
-        self._cycle_end_unsub = async_call_later(self._hass, self._cycle_duration_sec, self._on_master_cycle_end)
+        self._cycle_end_unsub = async_call_later(self._hass, self._get_time_to_next_boundary(), self._on_master_cycle_end)
 
     def _init_cycle(self, on_percent: float):
         """Initialize states and penalty for the new cycle.

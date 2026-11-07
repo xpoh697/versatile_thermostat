@@ -108,14 +108,28 @@ class ThermostatOverSwitch(ThermostatProp[UnderlyingSwitch]):
         for switch in self._underlyings:
             self.async_on_remove(async_track_state_change_event(self.hass, [switch.entity_id], self._async_switch_changed))
 
-        # Start the control_heating
-        # starts a cycle
+        # Start aligned cyclic control_heating
+        self._schedule_aligned_control_heating()
+
+    def _schedule_aligned_control_heating(self):
+        """Schedule control heating aligned to wall-clock boundaries (e.g. 00:00, 02:00...)."""
+        from homeassistant.util import dt as dt_util
+        from homeassistant.helpers.event import async_call_later
+
+        now = dt_util.now()
+        seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1_000_000.0
+        cycle_sec = max(60.0, float(self._cycle_min * 60))
+        rem = cycle_sec - (seconds_since_midnight % cycle_sec)
+        time_to_next = rem if rem >= 1.0 else cycle_sec
+
+        async def _aligned_tick(_now=None):
+            if not self.hass or self.is_removed:
+                return
+            await self.async_control_heating(force=True)
+            self._schedule_aligned_control_heating()
+
         self.async_on_remove(
-            async_track_time_interval(
-                self.hass,
-                self.async_control_heating,
-                interval=timedelta(minutes=self._cycle_min),
-            )
+            async_call_later(self.hass, time_to_next, _aligned_tick)
         )
 
     @overrides
