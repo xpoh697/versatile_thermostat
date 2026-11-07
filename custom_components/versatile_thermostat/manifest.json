@@ -6,6 +6,7 @@
     "http"
   ],
   "codeowners": [
+    "@jmcollin78",
     "@xpoh697"
   ],
   "config_flow": true,
