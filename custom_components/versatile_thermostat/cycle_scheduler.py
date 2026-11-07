@@ -344,11 +344,27 @@ class CycleScheduler:
         self._thermostat._on_time_sec = on_time_sec
         self._thermostat._off_time_sec = off_time_sec
 
-        if self.is_cycle_running and not force:
+        # Stop here if we are off
+        if hvac_mode == VThermHvacMode_OFF:
+            await self._cancel_cycle_impl()
+            for under in self._underlyings:
+                if under.is_device_active:
+                    await under.turn_off()
+                under._should_be_on = False
+            self._set_pending_cycle(hvac_mode, 0, self._cycle_duration_sec, 0.0, request)
+            self._set_active_cycle(hvac_mode, 0, self._cycle_duration_sec, 0.0)
+            return
+
+        # Mid-cycle protection:
+        # If a cycle is running and we are NOT at an astronomical boundary,
+        # do NOT restart the cycle or turn on switches mid-cycle.
+        rem = self._get_time_to_next_boundary()
+        elapsed_in_cycle = (self._cycle_duration_sec - rem) % self._cycle_duration_sec
+        is_at_boundary = _from_cycle_end or (elapsed_in_cycle <= 5.0)
+
+        if self.is_cycle_running and not is_at_boundary:
             if self._is_valve_mode:
-                # Valve mode must keep the current master-cycle window for
-                # learning callbacks, but the physical valve command still has
-                # to follow each new regulation result immediately.
+                # Valve mode follows each new regulation result immediately
                 _LOGGER.debug(
                     "%s - Valve cycle already running, applying immediate update: "
                     "on_time=%.0f, off_time=%.0f, on_percent=%.2f",
@@ -365,28 +381,16 @@ class CycleScheduler:
                     request,
                 )
                 return
-            if self._active_on_time_sec > 0:
-                # A real cycle is actively running — don't interrupt it.
-                # Just update stored params so the next auto-repeat uses them.
-                _LOGGER.debug(
-                    "%s - Cycle already running (on_time=%.0fs), skipping (force=%s). "
-                    "Updating params for next repeat: on_time=%.0f, off_time=%.0f, on_percent=%.2f",
-                    self._thermostat,
-                    self._active_on_time_sec,
-                    force,
-                    on_time_sec,
-                    off_time_sec,
-                    realized_on_percent,
-                )
-                self._set_pending_cycle(hvac_mode, on_time_sec, off_time_sec, realized_on_percent, request)
-                return
-            # Current cycle is idle (on_time=0, device off).
-            # To maintain synchronous clock grid, keep the aligned cycle running unless force=True.
-            _LOGGER.debug(
-                "%s - Cycle is running in idle phase, storing updated params for next aligned boundary: on_time=%.0f, off_time=%.0f",
+
+            _LOGGER.info(
+                "%s - Wall-clock cycle is active (elapsed=%.0fs, remaining=%.0fs). "
+                "Target change queued for next boundary: on_time=%.0fs, off_time=%.0fs, on_percent=%.2f",
                 self._thermostat,
+                elapsed_in_cycle,
+                rem,
                 on_time_sec,
                 off_time_sec,
+                realized_on_percent,
             )
             self._set_pending_cycle(hvac_mode, on_time_sec, off_time_sec, realized_on_percent, request)
             return
@@ -576,11 +580,12 @@ class CycleScheduler:
                 if under.is_device_active:
                     await under.turn_off()
                 under._should_be_on = False
-            # Keep a real master-cycle start time so the next automatic restart
-            # reports a full elapsed_ratio instead of looking interrupted with 0 s elapsed.
-            self._cycle_start_time = time.time()
+            # Keep a real master-cycle start time anchored to the wall-clock boundary
+            rem = self._get_time_to_next_boundary()
+            elapsed = (self._cycle_duration_sec - rem) % self._cycle_duration_sec
+            self._cycle_start_time = time.time() - elapsed
             # Schedule next cycle evaluation
-            self._cycle_end_unsub = async_call_later(self._hass, self._get_time_to_next_boundary(), self._on_master_cycle_end)
+            self._cycle_end_unsub = async_call_later(self._hass, rem, self._on_master_cycle_end)
             return
 
         if on_time_sec >= self._cycle_duration_sec:
@@ -588,10 +593,12 @@ class CycleScheduler:
             for under in self._underlyings:
                 await under.turn_on()
                 under._should_be_on = True
-            # Keep a real master-cycle start time for the same reason as 0% cycles.
-            self._cycle_start_time = time.time()
+            # Keep a real master-cycle start time anchored to the wall-clock boundary
+            rem = self._get_time_to_next_boundary()
+            elapsed = (self._cycle_duration_sec - rem) % self._cycle_duration_sec
+            self._cycle_start_time = time.time() - elapsed
             # Schedule next cycle evaluation
-            self._cycle_end_unsub = async_call_later(self._hass, self._get_time_to_next_boundary(), self._on_master_cycle_end)
+            self._cycle_end_unsub = async_call_later(self._hass, rem, self._on_master_cycle_end)
             return
 
         self._init_cycle(on_percent)
@@ -609,7 +616,9 @@ class CycleScheduler:
         with natural wrap-around for smooth load distribution.
         """
         self._penalty = 0.0
-        self._cycle_start_time = time.time()
+        rem = self._get_time_to_next_boundary()
+        elapsed = (self._cycle_duration_sec - rem) % self._cycle_duration_sec
+        self._cycle_start_time = time.time() - elapsed
 
         n = len(self._underlyings)
         on_time = self._cycle_duration_sec * on_percent
@@ -624,20 +633,18 @@ class CycleScheduler:
             self._states.append(state)
 
         _LOGGER.debug(
-            "%s - Initialized true tick cycle: on_percent=%.2f, offsets=%s",
-            self._thermostat, on_percent, offsets
+            "%s - Initialized true tick cycle: on_percent=%.2f, offsets=%s, elapsed_from_boundary=%.1f",
+            self._thermostat, on_percent, offsets, elapsed
         )
 
     async def _tick(self, _now=None, _is_initial: bool = False):
         """Evaluate all underlyings and schedule the next tick.
 
-        When _is_initial=True (called at cycle start), current_t is forced to 0.0
-        to avoid floating-point drift, and the is_device_active check is skipped so
-        the desired state is always enforced unconditionally on the first tick.
+        Evaluates target states based on elapsed time from the wall-clock boundary.
         """
         from homeassistant.util import dt as dt_util
         now = time.time()
-        current_t = 0.0 if _is_initial else (now - self._cycle_start_time)
+        current_t = now - self._cycle_start_time
 
         if not _is_initial and current_t >= self._cycle_duration_sec:
             # We reached the end of the cycle; let the master cycle end handle it.

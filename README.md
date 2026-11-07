@@ -4,7 +4,44 @@
 [![hacs][hacs_badge]][hacs]
 [![BuyMeCoffee][buymecoffeebadge]][buymecoffee]
 
-# Versatile Thermostat
+# Versatile Thermostat (Synchronized Multi-Zone Heating Edition)
+
+> 🌟 **Fork maintained by [@xpoh697](https://github.com/xpoh697/versatile_thermostat)** | Based on the original masterpiece by [@jmcollin78](https://github.com/jmcollin78/versatile_thermostat)  
+> Co-maintained by **@jmcollin78** & **@xpoh697**
+
+---
+
+### 🎯 Why this fork? (Solving Boiler Short-Cycling & Multi-Zone Heating Chaos)
+
+This fork addresses a critical engineering challenge observed in multi-zone hydronic heating systems (underfloor heating slabs, gas/pellet condensing boilers, and heat pumps) controlled by individual virtual thermostats:
+
+#### 1. ⏱️ Wall-Clock Aligned Cycle Synchronization
+* **The Problem in Standard VTherm:** Each virtual thermostat schedules its TPI cycle relative to its own startup time or Home Assistant reboot time (`now + cycle_min`). In a home with 10–15 zones, thermal actuators open and close asynchronously at random moments throughout the hour. When only a single zone calls for heat (~0.8 kW load), it falls far below the boiler's minimum modulation threshold (~5–6 kW). The boiler rapidly overheats its primary heat exchanger, hits the setpoint cut-off within 90 seconds, and shuts down — short-cycling up to 8–10 times per hour. This causes excessive gas consumption, high pump wear, premature igniter degradation, and erratic slab heating.
+* **The Solution in this Fork:** All TPI thermostats are pinned to an absolute wall-clock grid (`seconds_since_midnight % cycle_sec == 0`). For a 120-minute cycle, all thermostats synchronously align to `00:00`, `02:00`, `04:00`, `06:00`, etc. At each boundary, all zones requiring heat open their valves simultaneously, providing sufficient aggregate flow and load (8–12 kW). The boiler ignites once, runs continuously in high-efficiency condensing mode, and shuts off cleanly when demand is satisfied.
+
+#### 2. 🔒 Anti-Drift Idle & Mid-Cycle Boundary Lock
+* **The Problem:** In the upstream code, when a zone entered an `idle` state (`on_time = 0`) or when a user manually adjusted setpoint temperature mid-cycle, VTherm immediately cancelled the running cycle and initiated a brand-new 120-minute cycle starting from that exact second. This immediately broke phase alignment across the home and caused immediate premature boiler ignitions.
+* **The Solution:** The scheduler maintains the wall-clock boundary regardless of idle state transitions or mid-cycle temperature adjustments. Mid-cycle changes queue new parameters for the upcoming wall-clock boundary without triggering relays mid-cycle, guaranteeing that all zones remain locked in phase indefinitely.
+
+#### 3. 📐 Harmonic Cycle Period Selector
+* To eliminate mathematical cycle drift between zones with different thermal inertia, cycle duration selection in the configuration UI is restricted to natural harmonic divisors of an hour and a day:  
+  **`5, 10, 15, 20, 30, 60, 120, 180, 240 minutes`**.
+* This ensures that fast-responding zones (e.g. 30-minute radiator circuits) and heavy-mass zones (e.g. 120-minute concrete slabs) naturally align at common temporal nodes without timing jitter.
+
+---
+
+### Comparison: Upstream VTherm vs @xpoh697 Synchronized Edition
+
+| Feature / Behavior | Upstream VTherm | Synchronized Edition (@xpoh697) |
+| :--- | :--- | :--- |
+| **TPI Cycle Anchor** | Entity startup time (`now + cycle_min`) | Wall-clock astronomical boundary (`00:00`, `02:00`...) |
+| **Multi-Zone Firing** | Random asynchronous actuator firing | Synchronized batch firing at boundary start |
+| **Boiler Burner Duty** | Rapid short-cycling (up to 10 starts/hour at 0.8 kW) | Long, continuous, high-efficiency condensing burn |
+| **Mid-Cycle Setpoint Change** | Resets timer and starts heating immediately | Queues parameters for next boundary (no premature firing) |
+| **Mid-Cycle Idle Behavior** | Resets timer and breaks phase alignment | Locks phase boundary; prevents timing drift |
+| **Cycle Duration Input** | Free-form minutes (prone to non-harmonic drift) | Harmonic selector (5, 10, 15, 20, 30, 60, 120, 180, 240 min) |
+
+---
 
 This README file is available in
 languages : [English](README.md) | [Français](README-fr.md) | [Deutsch](README-de.md) | [Čeština](README-cs.md) | [Polski](README-pl.md)
@@ -38,6 +75,13 @@ Versatile Thermostat UI Card (Available on [Github](https://github.com/jmcollin7
 
 # What's New?
 ![New](images/new-icon.png)
+
+## Release 10.6.5 (Synchronized Multi-Zone Heating Edition)
+
+- **fix(scheduler)**: Implemented mid-cycle protection lock: manual temperature, setpoint, or preset changes mid-interval now queue cleanly for the upcoming boundary without prematurely firing relays or desynchronizing from the global clock.
+- **feat(scheduler)**: Pinned cycle start and `_tick` timing to the wall-clock astronomical grid (`seconds_since_midnight % cycle_sec`).
+- **feat(config)**: Added harmonic cycle duration selector (`5, 10, 15, 20, 30, 60, 120, 180, 240 min`) in config and options flows.
+- **chore(manifest)**: Added `@xpoh697` to `codeowners` alongside `@jmcollin78`, pointed documentation and issue tracker to fork repository.
 
 ## Release 10.6.1
 
@@ -189,13 +233,13 @@ If you wish to contribute, please read the [contribution guidelines](CONTRIBUTIN
 [versatile_thermostat]: https://github.com/jmcollin78/versatile_thermostat
 [buymecoffee]: https://www.buymeacoffee.com/jmcollin78
 [buymecoffeebadge]: https://img.shields.io/badge/Buy%20me%20a%20beer-%245-orange?style=for-the-badge&logo=buy-me-a-beer
-[commits-shield]: https://img.shields.io/github/commit-activity/y/jmcollin78/versatile_thermostat.svg?style=for-the-badge
-[commits]: https://github.com/jmcollin78/versatile_thermostat/commits/master
+[commits-shield]: https://img.shields.io/github/commit-activity/y/xpoh697/versatile_thermostat.svg?style=for-the-badge
+[commits]: https://github.com/xpoh697/versatile_thermostat/commits/main
 [hacs]: https://github.com/custom-components/hacs
 [hacs_badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge
 [forum-shield]: https://img.shields.io/badge/community-forum-brightgreen.svg?style=for-the-badge
 [forum]: https://community.home-assistant.io/
-[license-shield]: https://img.shields.io/github/license/jmcollin78/versatile_thermostat.svg?style=for-the-badge
+[license-shield]: https://img.shields.io/github/license/xpoh697/versatile_thermostat.svg?style=for-the-badge
 [maintenance-shield]: https://img.shields.io/badge/maintainer-Joakim%20Sørensen%20%40ludeeus-blue.svg?style=for-the-badge
-[releases-shield]: https://img.shields.io/github/release/jmcollin78/versatile_thermostat.svg?style=for-the-badge
-[releases]: https://github.com/jmcollin78/versatile_thermostat/releases
+[releases-shield]: https://img.shields.io/github/release/xpoh697/versatile_thermostat.svg?style=for-the-badge
+[releases]: https://github.com/xpoh697/versatile_thermostat/releases
