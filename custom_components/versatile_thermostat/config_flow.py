@@ -510,7 +510,7 @@ class VersatileThermostatBaseConfigFlow(FlowHandler):
         self._infos.update(user_input)
         if CONF_CYCLE_MIN in self._infos:
             try:
-                self._infos[CONF_CYCLE_MIN] = int(self._infos[CONF_CYCLE_MIN])
+                self._infos[CONF_CYCLE_MIN] = int(float(self._infos[CONF_CYCLE_MIN]))
             except (ValueError, TypeError):
                 pass
         for key, _ in data_schema.schema.items():

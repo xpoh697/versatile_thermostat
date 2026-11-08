@@ -314,7 +314,8 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
                 # Extract the actual key from Voluptuous Marker objects
                 key = marker.schema if hasattr(marker, 'schema') else marker
                 if key in cfg and key not in excluded_keys:
-                    del cfg[key]
+                    if central_config and key in central_config.data and central_config.data[key] is not None:
+                        del cfg[key]
 
         cfg = config_entry.copy()
         if central_config and central_config.data:
@@ -402,7 +403,10 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
         self._attr_preset_modes = []
         self._vtherm_preset_modes = []
 
-        self._cycle_min = max(1, entry_infos.get(CONF_CYCLE_MIN, 1))
+        try:
+            self._cycle_min = max(1, int(float(entry_infos.get(CONF_CYCLE_MIN, 60))))
+        except (ValueError, TypeError):
+            self._cycle_min = 60
 
         # Initialize underlying entities (will be done in subclasses)
         self._underlyings = []

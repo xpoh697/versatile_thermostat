@@ -135,6 +135,20 @@ STEP_USER_DATA_SCHEMA = vol.Schema(  # pylint: disable=invalid-name
     }
 )
 
+CYCLE_MIN_CHOICES = [
+    selector.SelectOptionDict(value="5", label="5 мин (электроконвекторы / ТЭНы)"),
+    selector.SelectOptionDict(value="10", label="10 мин (электрорадиаторы)"),
+    selector.SelectOptionDict(value="15", label="15 мин (радиаторы отопления)"),
+    selector.SelectOptionDict(value="20", label="20 мин (радиаторы / легкий пол)"),
+    selector.SelectOptionDict(value="30", label="30 мин (смешанные контуры)"),
+    selector.SelectOptionDict(value="45", label="45 мин (теплый пол / промежуточный)"),
+    selector.SelectOptionDict(value="60", label="60 мин / 1 час (теплый пол)"),
+    selector.SelectOptionDict(value="90", label="90 мин / 1.5 часа (инерционный теплый пол)"),
+    selector.SelectOptionDict(value="120", label="120 мин / 2 часа (стяжка теплого пола)"),
+    selector.SelectOptionDict(value="180", label="180 мин / 3 часа (тяжелая стяжка)"),
+    selector.SelectOptionDict(value="240", label="240 мин / 4 часа (УШП / фундаментная плита)"),
+]
+
 STEP_MAIN_DATA_SCHEMA = vol.Schema(  # pylint: disable=invalid-name
     {
         vol.Required(CONF_NAME): cv.string,
@@ -146,17 +160,7 @@ STEP_MAIN_DATA_SCHEMA = vol.Schema(  # pylint: disable=invalid-name
         ),
         vol.Required(CONF_CYCLE_MIN, default="5"): selector.SelectSelector(
             selector.SelectSelectorConfig(
-                options=[
-                    selector.SelectOptionDict(value="5", label="5 мин (электроконвекторы / ТЭНы)"),
-                    selector.SelectOptionDict(value="10", label="10 мин (электрорадиаторы)"),
-                    selector.SelectOptionDict(value="15", label="15 мин (радиаторы отопления)"),
-                    selector.SelectOptionDict(value="20", label="20 мин (радиаторы / легкий пол)"),
-                    selector.SelectOptionDict(value="30", label="30 мин (смешанные контуры)"),
-                    selector.SelectOptionDict(value="60", label="60 мин / 1 час (теплый пол)"),
-                    selector.SelectOptionDict(value="120", label="120 мин / 2 часа (стяжка теплого пола)"),
-                    selector.SelectOptionDict(value="180", label="180 мин / 3 часа (тяжелая стяжка)"),
-                    selector.SelectOptionDict(value="240", label="240 мин / 4 часа (УШП / фундаментная плита)"),
-                ],
+                options=CYCLE_MIN_CHOICES,
                 mode=selector.SelectSelectorMode.DROPDOWN,
                 custom_value=False,
             )
@@ -226,6 +230,13 @@ STEP_CENTRAL_MAIN_DATA_SCHEMA = vol.Schema(  # pylint: disable=invalid-name
         vol.Required(CONF_TEMP_MAX, default=35): vol.Coerce(float),
 
         vol.Required(CONF_STEP_TEMPERATURE, default=0.1): vol.Coerce(float),
+        vol.Required(CONF_CYCLE_MIN, default="60"): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=CYCLE_MIN_CHOICES,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                custom_value=False,
+            )
+        ),
     }
 )
 
