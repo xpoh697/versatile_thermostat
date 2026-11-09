@@ -344,8 +344,8 @@ class CycleScheduler:
         self._thermostat._on_time_sec = on_time_sec
         self._thermostat._off_time_sec = off_time_sec
 
-        # Stop here if we are off
-        if hvac_mode == VThermHvacMode_OFF:
+        # Stop here if we are off or heating is no longer required (overshoot protection)
+        if hvac_mode == VThermHvacMode_OFF or on_time_sec <= 0:
             await self._cancel_cycle_impl()
             for under in self._underlyings:
                 if under.is_device_active:
@@ -353,6 +353,11 @@ class CycleScheduler:
                 under._should_be_on = False
             self._set_pending_cycle(hvac_mode, 0, self._cycle_duration_sec, 0.0, request)
             self._set_active_cycle(hvac_mode, 0, self._cycle_duration_sec, 0.0)
+            if hvac_mode != VThermHvacMode_OFF:
+                rem = self._get_time_to_next_boundary()
+                elapsed = (self._cycle_duration_sec - rem) % self._cycle_duration_sec
+                self._cycle_start_time = time.time() - elapsed
+                self._cycle_end_unsub = async_call_later(self._hass, rem, self._on_master_cycle_end)
             return
 
         # Mid-cycle protection:
@@ -362,7 +367,7 @@ class CycleScheduler:
         elapsed_in_cycle = (self._cycle_duration_sec - rem) % self._cycle_duration_sec
         is_at_boundary = _from_cycle_end or (elapsed_in_cycle <= 5.0)
 
-        if self.is_cycle_running and not is_at_boundary:
+        if self.is_cycle_running and not is_at_boundary and not force:
             if self._is_valve_mode:
                 # Valve mode follows each new regulation result immediately
                 _LOGGER.debug(
