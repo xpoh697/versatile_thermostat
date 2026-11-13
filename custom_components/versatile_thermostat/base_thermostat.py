@@ -2,12 +2,18 @@
 # pylint: disable=too-many-lines
 # pylint: disable=invalid-name
 """ Implements the VersatileThermostat climate component """
+import asyncio
 import math
 from typing import Optional, Any, Generic
 from datetime import datetime
 from collections.abc import Callable
 
-from vtherm_api import ValveDiagnosticState
+from vtherm_api import (
+    UNDERLYING_HOOK_TIMEOUT_SEC,
+    UnderlyingPowerCommand,
+    ValveCommand,
+    ValveDiagnosticState,
+)
 from vtherm_api.log_collector import get_vtherm_logger
 from homeassistant.util import dt as dt_util
 
@@ -277,14 +283,22 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
         """
         api = VersatileThermostatAPI.get_vtherm_api(self.hass)
         if api is None or not hasattr(api, "get_feature_manager_factories"):
+            _LOGGER.debug(
+                "%s - external feature managers not loaded: api=%s, has get_feature_manager_factories=%s",
+                self,
+                api is not None,
+                hasattr(api, "get_feature_manager_factories"),
+            )
             return
 
         for factory in api.get_feature_manager_factories():
             name = factory.name
             if name in self._external_manager_names:
+                _LOGGER.debug("%s - external feature manager '%s' already loaded", self, name)
                 continue
             try:
                 if not factory.supports(self):
+                    _LOGGER.debug("%s - external feature manager '%s' not created: supports() returned False", self, name)
                     continue
                 manager = factory.create(self)
                 manager.post_init(self._entry_infos)
@@ -301,6 +315,82 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
             self._external_manager_names.add(name)
             self._external_managers.append(manager)
             _LOGGER.info("%s - Registered external feature manager '%s'", self, name)
+
+    def _is_external_manager_configured(self, manager) -> bool:
+        """Read is_configured of an external manager. A failing manager is considered not configured."""
+        try:
+            return bool(manager.is_configured)
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.error(
+                "%s - Error while reading is_configured of external feature manager '%s': %s",
+                self,
+                getattr(manager, "name", None),
+                exc,
+            )
+            return False
+
+    async def _async_call_external_hook(self, method_name: str, *args) -> None:
+        """Call an optional hook on each configured external feature manager.
+
+        A failing or slow plugin is logged and never blocks the core command.
+        """
+        for manager in self._external_managers:
+            hook = getattr(manager, method_name, None)
+            if hook is None:
+                _LOGGER.debug("%s - external hook %s skipped for '%s': the manager has no such hook", self, method_name, manager.name)
+                continue
+            if not self._is_external_manager_configured(manager):
+                _LOGGER.debug("%s - external hook %s skipped for '%s': is_configured is False", self, method_name, manager.name)
+                continue
+            _LOGGER.debug("%s - calling external hook %s of '%s'", self, method_name, manager.name)
+            try:
+                async with asyncio.timeout(UNDERLYING_HOOK_TIMEOUT_SEC):
+                    await hook(*args)
+            except TimeoutError:
+                _LOGGER.warning(
+                    "%s - External feature manager '%s' timed out in %s",
+                    self,
+                    manager.name,
+                    method_name,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                _LOGGER.error(
+                    "%s - Error in %s of external feature manager '%s': %s",
+                    self,
+                    method_name,
+                    manager.name,
+                    exc,
+                )
+
+    async def async_before_underlying_hvac_mode(
+        self,
+        climate_entity_id: str,
+        hvac_mode: VThermHvacMode | str,
+        current_hvac_mode: VThermHvacMode | str | None,
+        command_cause: str | None = None,
+    ) -> None:
+        """Notify external managers that an underlying climate is about to change its HVAC mode."""
+        if not self._external_managers:
+            return
+        await self._async_call_external_hook(
+            "async_before_underlying_hvac_mode",
+            climate_entity_id,
+            str(hvac_mode),
+            None if current_hvac_mode is None else str(current_hvac_mode),
+            command_cause,
+        )
+
+    async def async_after_valve_command(self, command: ValveCommand) -> None:
+        """Notify external managers that a valve command was sent to a valve-regulation underlying."""
+        if not self._external_managers:
+            return
+        await self._async_call_external_hook("async_after_valve_command", command)
+
+    async def async_on_underlying_power(self, command: UnderlyingPowerCommand) -> None:
+        """Notify external managers of the power requested from and applied to an underlying."""
+        if not self._external_managers:
+            return
+        await self._async_call_external_hook("async_on_underlying_power", command)
 
     def clean_central_config_doublon(
         self, config_entry: ConfigData, central_config: ConfigEntry | None
@@ -1782,6 +1872,15 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
     ##
     ## Calculation and utility functions
     ##
+    @property
+    def _setpoint_modifiers(self) -> list:
+        """The configured external feature managers which adjust the regulated temperature. None by default"""
+        return []
+
+    async def _before_underlying_hvac_mode_change(self, _command_cause: str | None = None):
+        """Called when a new hvac mode has been calculated, just before it is sent to the underlyings, and only if a configured
+        external feature manager adjusts the regulated temperature. Does nothing by default. A specific thermostat can override it to send a command first."""
+
     async def update_states(
         self,
         force=False,
@@ -1824,6 +1923,9 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
                 # Apply hvac_mode
                 if self._state_manager.current_state.is_hvac_mode_changed:
                     _LOGGER.info("%s - Applying new hvac mode: %s", self, self.vtherm_hvac_mode)
+                    # Only a thermostat with a configured plugin which adjusts the regulated temperature can send a command first
+                    if self._setpoint_modifiers:
+                        await self._before_underlying_hvac_mode_change(_command_cause)
                     # Delegate to all underlying
                     for under in self._underlyings:
                         set_mode_result = await under.set_hvac_mode(
